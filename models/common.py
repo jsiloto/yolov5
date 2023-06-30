@@ -257,6 +257,29 @@ class GhostConv(nn.Module):
         y = self.cv1(x)
         return torch.cat((y, self.cv2(y)), 1)
 
+class Split(nn.Module):
+    def __init__(self, c1, bottleneck_ratio=0.5):
+        super().__init__()
+        self.original_channels = c1
+        self.bottleneck_ratio = bottleneck_ratio
+
+    def forward(self, x):
+        bottleneck_channels = int(self.bottleneck_ratio * self.original_channels)
+        if self.bottleneck_ratio > 0:
+            # Encode & Decode
+            x[:, bottleneck_channels:, ::] = 0
+            # x = x[:, :bottleneck_channels, ::]
+            #
+            # # Decode
+            #
+            # device = x.get_device()
+            # if device < 0:
+            #     device = torch.device("cpu")
+            # zeros = torch.zeros(x.shape[0], self.original_channels - bottleneck_channels, x.shape[2], x.shape[3]).to(device)
+            # x = torch.cat((x, zeros), dim=1)
+
+        return x
+
 
 class GhostBottleneck(nn.Module):
     # Ghost Bottleneck https://github.com/huawei-noah/ghostnet
