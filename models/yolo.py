@@ -325,6 +325,13 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
             if m in {BottleneckCSP, C3, C3TR, C3Ghost, C3x}:
                 args.insert(2, n)  # number of repeats
                 n = 1
+
+        elif m is C3Split:
+            c1 = ch[f]
+            c2 = args[0]
+            c2 = make_divisible(c2 * gw, 8)
+            args = [c1, c2, n, *args[1:]]
+
         elif m is nn.BatchNorm2d:
             args = [ch[f]]
         elif m is Concat:

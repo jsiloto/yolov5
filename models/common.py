@@ -167,6 +167,28 @@ class C3(nn.Module):
         return self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
 
 
+class C3Split(nn.Module):
+    # CSP Bottleneck with 3 convolutions
+    def __init__(self, c1, c2, n=1, bottleneck_ratio=0.5, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+        super().__init__()
+        c_ = int(c2 * e)  # hidden channels
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c1, c_, 1, 1)
+        self.cv3 = Conv(2 * c_, c2, 1)  # optional act=FReLU(c2)
+        self.m = nn.Sequential(*(Bottleneck(c_, c_, shortcut, g, e=1.0) for _ in range(n)))
+        self.original_channels = c2
+        self.bottleneck_ratio = bottleneck_ratio
+        # print(c1, c2)
+        # print("Self.bottleneck_ratio: ", self.bottleneck_ratio)
+        # print("Self.n: ", n)
+
+    def forward(self, x):
+        x = self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
+        if self.bottleneck_ratio > 0:
+            bottleneck_channels = int(self.bottleneck_ratio * self.original_channels)
+            x[:, bottleneck_channels:, ::] = 0
+        return x
+
 class C3x(C3):
     # C3 module with cross-convolutions
     def __init__(self, c1, c2, n=1, shortcut=True, g=1, e=0.5):
