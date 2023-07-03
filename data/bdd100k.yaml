@@ -6,12 +6,12 @@ test: images/100k/test  # 20288 of 40670 images, submit to https://competitions.
 
 # Classes
 names:
-  1: person
-  2: car
-  3: rider 
-  4: bus
-  5: truck
-  6: bike
-  7: motor
-  8: traffic light
-  9: traffic sign
+  0: person
+  1: car
+  2: rider 
+  3: bus
+  4: truck
+  5: bike
+  6: motor
+  7: traffic light
+  8: traffic sign
