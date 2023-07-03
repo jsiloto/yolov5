@@ -181,6 +181,7 @@ class C3Split(nn.Module):
         # print(c1, c2)
         # print("Self.bottleneck_ratio: ", self.bottleneck_ratio)
         # print("Self.n: ", n)
+        print("Bottleneck_channels: ",  self.bottleneck_ratio * self.original_channels)
 
     def forward(self, x):
         x = self.cv3(torch.cat((self.m(self.cv1(x)), self.cv2(x)), 1))
