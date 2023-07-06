@@ -6,5 +6,5 @@ PARAMETERS_HYP0="${PARAMETERS_BASE} --data bdd100k.yaml"
 for P in "02" "04" "06" "10" "20"
 do
     python train.py --cfg models/split/yolov5s_split.${P}.yaml ${PARAMETERS_HYP0} \
-    --project hyp0 --name ${P} 2>&1 | tee -a hyp0/log${P}.txt
+    --project hyp0 --name ${P} 2>&1 
 done
