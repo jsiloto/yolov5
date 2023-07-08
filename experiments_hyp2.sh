@@ -1,7 +1,7 @@
 #!/bin/bash
 
 PARAMETERS_BASE="--img 640 --epochs 15 --batch-size 64 --weights yolov5s.pt --exist-ok"
-PARAMETERS_HYP2="${PARAMETERS_BASE} --data bdd100k.yaml"
+PARAMETERS_HYP2="${PARAMETERS_BASE} --data bdd100khyp2.yaml"
 
 for P in "02" "04" "06" "10" "20"
 do
