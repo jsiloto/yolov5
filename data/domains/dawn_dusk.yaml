@@ -1,0 +1,14 @@
+names:
+  0: person
+  1: car
+  2: rider
+  3: bus
+  4: truck
+  5: bike
+  6: motor
+  7: traffic light
+  8: traffic sign
+path: /data/datasets/bdd100k/domains/dawn_dusk
+test: images/100k/test
+train: images/train
+val: images/val
