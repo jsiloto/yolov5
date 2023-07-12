@@ -334,6 +334,17 @@ def run(
     maps = np.zeros(nc) + map
     for i, c in enumerate(ap_class):
         maps[c] = ap[i]
+
+    results = {
+        "precision": mp,
+        "recall": mr,
+        "map50": map50,
+        "map": map,
+        "classes_map": maps.tolist()
+    }
+    with open(f"{save_dir}/results.json", "w") as fp:
+        json.dump(results, fp)
+
     return (mp, mr, map50, map, *(loss.cpu() / len(dataloader)).tolist()), maps, t
 
 
@@ -377,7 +388,9 @@ def main(opt):
             LOGGER.info(f'WARNING ⚠️ confidence threshold {opt.conf_thres} > 0.001 produces invalid results')
         if opt.save_hybrid:
             LOGGER.info('WARNING ⚠️ --save-hybrid will return high mAP from hybrid labels, not from predictions alone')
-        run(**vars(opt))
+        all, maps, t = run(**vars(opt))
+
+
 
     else:
         weights = opt.weights if isinstance(opt.weights, list) else [opt.weights]
