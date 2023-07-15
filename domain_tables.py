@@ -11,7 +11,7 @@ df = pd.DataFrame(columns=domains, index=domains)
 for data in domains:
     series = {}
     for model in domains:
-        results_file = f"domain_val/{model}.{data}/results.json"
+        results_file = f"domain_split_val/{model}.{data}/results.json"
         with open(results_file, "r") as fp:
             results = json.load(fp)
             series[model] = results['map']*100
