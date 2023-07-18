@@ -26,6 +26,8 @@ from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 
+import torchvision
+
 try:
     import comet_ml  # must be imported before torch (if installed)
 except ImportError:
@@ -70,6 +72,34 @@ LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable
 RANK = int(os.getenv('RANK', -1))
 WORLD_SIZE = int(os.getenv('WORLD_SIZE', 1))
 GIT_INFO = check_git_info()
+
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(3, 6, 5)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.fc1 = nn.Linear(16 * 61 * 61, 120)
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, 2)
+        self.output = nn.Softmax()
+        self.resize = torchvision.transforms.Resize(256)
+
+    def forward(self, x):
+        x = self.resize(x)
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = torch.flatten(x, 1) # flatten all dimensions except batch
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        x = self.output(x)
+        return x
+
 
 
 def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictionary
@@ -140,22 +170,22 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     for k, v in model2.named_parameters():
         v.requires_grad = False  # train all layers
 
+    amp = check_amp(model1)  # check AMP
 
-    model = Model(cfg, ch=3, nc=nc, anchors=hyp.get('anchors')).to(device)  # create
-    amp = check_amp(model)  # check AMP
+    model = Net().to(device)
 
     for k, v in model.named_parameters():
         v.requires_grad = True  # train all layers
 
 
     # Image size
-    gs = max(int(model.stride.max()), 32)  # grid size (max stride)
+    gs = max(int(model1.stride.max()), 32)  # grid size (max stride)
     imgsz = check_img_size(opt.imgsz, gs, floor=gs * 2)  # verify imgsz is gs-multiple
 
-    # Batch size
-    if RANK == -1 and batch_size == -1:  # single-GPU only, estimate best batch size
-        batch_size = check_train_batch_size(model, imgsz, amp)
-        loggers.on_params_update({'batch_size': batch_size})
+    # # Batch size
+    # if RANK == -1 and batch_size == -1:  # single-GPU only, estimate best batch size
+    #     batch_size = check_train_batch_size(model, imgsz, amp)
+    #     loggers.on_params_update({'batch_size': batch_size})
 
     # Optimizer
     nbs = 64  # nominal batch size
@@ -227,21 +257,21 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 
         if not resume:
             if not opt.noautoanchor:
-                check_anchors(dataset, model=model, thr=hyp['anchor_t'], imgsz=imgsz)  # run AutoAnchor
+                check_anchors(dataset, model=model1, thr=hyp['anchor_t'], imgsz=imgsz)  # run AutoAnchor
             model.half().float()  # pre-reduce anchor precision
 
         callbacks.run('on_pretrain_routine_end', labels, names)
 
     # Model attributes
-    nl = de_parallel(model).model[-1].nl  # number of detection layers (to scale hyps)
+    nl = de_parallel(model1).model[-1].nl  # number of detection layers (to scale hyps)
     hyp['box'] *= 3 / nl  # scale to layers
     hyp['cls'] *= nc / 80 * 3 / nl  # scale to classes and layers
     hyp['obj'] *= (imgsz / 640) ** 2 * 3 / nl  # scale to image size and layers
     hyp['label_smoothing'] = opt.label_smoothing
-    model.nc = nc  # attach number of classes to model
-    model.hyp = hyp  # attach hyperparameters to model
-    model.class_weights = labels_to_class_weights(dataset.labels, nc).to(device) * nc  # attach class weights
-    model.names = names
+    model1.nc = nc  # attach number of classes to model
+    model1.hyp = hyp  # attach hyperparameters to model
+    model1.class_weights = labels_to_class_weights(dataset.labels, nc).to(device) * nc  # attach class weights
+    model1.names = names
 
     # Start training
     t0 = time.time()
@@ -254,7 +284,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
     scheduler.last_epoch = start_epoch - 1  # do not move
     scaler = torch.cuda.amp.GradScaler(enabled=amp)
     stopper, stop = EarlyStopping(patience=opt.patience), False
-    compute_loss = ComputeLoss(model)  # init loss class
+    compute_loss = ComputeLoss(model1)  # init loss class
+    loss_fn = torch.nn.CrossEntropyLoss()
     callbacks.run('on_train_start')
     LOGGER.info(f'Image sizes {imgsz} train, {imgsz} val\n'
                 f'Using {train_loader.num_workers * WORLD_SIZE} dataloader workers\n'
@@ -308,12 +339,18 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
 
             # Forward
             with torch.cuda.amp.autocast(amp):
-                pred = model(imgs)  # forward
-                loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
-                if RANK != -1:
-                    loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
-                if opt.quad:
-                    loss *= 4.
+                pred1 = model1(imgs)  # forward
+                loss1, loss_items1 = compute_loss(pred1, targets.to(device))  # loss scaled by batch_size
+                pred2 = model2(imgs)  # forward
+                loss2, loss_items2 = compute_loss(pred2, targets.to(device))  # loss scaled by batch_size
+                loss1 = 1/loss1
+                loss2 = 1/loss2
+
+                target = torch.cat([loss1, loss2])/(loss1+loss2)
+                target = torch.unsqueeze(target, 0)
+                decision = model(imgs)
+                loss = loss_fn(decision, target)
+
 
             # Backward
             scaler.scale(loss).backward()
@@ -330,14 +367,14 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
                 last_opt_step = ni
 
             # Log
-            if RANK in {-1, 0}:
-                mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
-                mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
-                pbar.set_description(('%11s' * 2 + '%11.4g' * 5) %
-                                     (f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
-                callbacks.run('on_train_batch_end', model, ni, imgs, targets, paths, list(mloss))
-                if callbacks.stop_training:
-                    return
+            # if RANK in {-1, 0}:
+            #     mloss = (mloss * i + loss_items) / (i + 1)  # update mean losses
+            #     mem = f'{torch.cuda.memory_reserved() / 1E9 if torch.cuda.is_available() else 0:.3g}G'  # (GB)
+            #     pbar.set_description(('%11s' * 2 + '%11.4g' * 5) %
+            #                          (f'{epoch}/{epochs - 1}', mem, *mloss, targets.shape[0], imgs.shape[-1]))
+            #     callbacks.run('on_train_batch_end', model, ni, imgs, targets, paths, list(mloss))
+            #     if callbacks.stop_training:
+            #         return
             # end batch ------------------------------------------------------------------------------------------------
 
         # Scheduler
