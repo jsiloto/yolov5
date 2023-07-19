@@ -51,7 +51,7 @@ def main(opt):
                                    stride,
                                    False,
                                    pad=pad,
-                                   rect=rect,
+                                   rect=False,
                                    workers=workers,
                                    prefix=colorstr(f'{task}: '))[0]
 
@@ -64,27 +64,43 @@ def main(opt):
 
     stats = []
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
-
+        size = im.shape[2:4]
+        nb, _, height, width = im.shape  # batch size, channels, height, width
+        targets[:, 2:] *= torch.tensor((width, height, width, height), device=device)
         for i in range(len(paths)):
             labelsn = targets[targets[:, 0] == i, 1:]
-            label_file = paths[i].split("/")[-1].split(".")[0] + ".txt"
-            label_file = os.path.join(opt.txt, label_file)
-            with open(label_file, "r") as f:
-                lb = np.array([x.split() for x in f.read().strip().splitlines()], dtype=np.float32)  # labels
-                predn = torch.from_numpy(np.concatenate((lb[:, 1:], lb[:, 0:1]), axis=1)) # label
-                print(predn)
-                print(labelsn)
-                correct = process_batch(predn, labelsn, iouv)
-                stats.append((correct, predn[:, 4], predn[:, 5], labelsn[:, 0]))
-                # print(correct)
+            pred_file = paths[i].split("/")[-1].split(".")[0] + ".txt"
+            pred_file = os.path.join(opt.txt, pred_file)
+            try:
+                with open(pred_file, "r") as f:
+                    # Process detections
+                    pb = torch.from_numpy(
+                        np.array([x.split() for x in f.read().strip().splitlines()], dtype=np.float32)
+                    )
+                    pb[:, 1:5] *= torch.tensor((width, height, width, height), device=device)
+
+                    #
+
+                    tbox = xywh2xyxy(pb[:, 1:5])
+                    # scale_boxes(size, tbox, shapes[i][0], shapes[i][1])
+                    predn = torch.cat((tbox, pb[:, 5:6],  pb[:, 0:1]), 1)
+
+                    # Process targets
+                    tbox = xywh2xyxy(labelsn[:, 1:5])
+                    # scale_boxes(size, tbox, shapes[i][0], shapes[i][1])
+                    labelsn = torch.cat((labelsn[:, 0:1], tbox), 1)
+                    correct = process_batch(predn, labelsn, iouv)
+                    stats.append((correct, predn[:, 4], predn[:, 5], labelsn[:, 0]))
+            except FileNotFoundError:
+                print(f"FileNotFoundError: {pred_file}")
+                continue
 
         stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
         if len(stats) and stats[0].any():
             tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=False, save_dir="./", names=data['names'])
             ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
             mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
-
-        print(mp, mr, map50, map)
+            print(mp, mr, map50, map)
         exit()
 
 def process_batch(detections, labels, iouv):
