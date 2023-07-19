@@ -67,6 +67,7 @@ def main(opt):
         size = im.shape[2:4]
         nb, _, height, width = im.shape  # batch size, channels, height, width
         targets[:, 2:] *= torch.tensor((width, height, width, height), device=device)
+
         for i in range(len(paths)):
             labelsn = targets[targets[:, 0] == i, 1:]
             pred_file = paths[i].split("/")[-1].split(".")[0] + ".txt"
@@ -95,13 +96,13 @@ def main(opt):
                 print(f"FileNotFoundError: {pred_file}")
                 continue
 
-        stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
-        if len(stats) and stats[0].any():
-            tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=False, save_dir="./", names=data['names'])
-            ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
-            mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
-            print(mp, mr, map50, map)
-        exit()
+    stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
+    if len(stats) and stats[0].any():
+        tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=False, save_dir="./", names=data['names'])
+        ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
+        mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
+        print(mp, mr, map50, map)
+    exit()
 
 def process_batch(detections, labels, iouv):
     """
