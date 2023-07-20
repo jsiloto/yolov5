@@ -89,10 +89,10 @@ def txtval(data, txt1, txt2):
                 print(f"FileNotFoundError: {pred_file}")
                 continue
 
-    final_map(stats1, data)
-    final_map(stats2, data)
-    final_map(stats_best, data)
-
+    map1 = final_map(stats1, data)
+    map2 = final_map(stats2, data)
+    map_best = final_map(stats_best, data)
+    return map1, map2, map_best
 
 def final_map(stats, data):
     stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
@@ -101,6 +101,7 @@ def final_map(stats, data):
         ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
         mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
         print(mp, mr, map50, map)
+    return map
 
 
 def get_single_stats(pred_file, labelsn, iouv, width, height, device):
