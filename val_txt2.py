@@ -25,7 +25,8 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='dataset.yaml path')
-    parser.add_argument('--txt', type=str, default=ROOT / 'data/coco128.yaml', help='label results path')
+    parser.add_argument('--txt1', type=str, default=ROOT / 'data/coco128.yaml', help='label results path')
+    parser.add_argument('--txt2', type=str, default=ROOT / 'data/coco128.yaml', help='label results path')
     parser.add_argument('--batch-size', type=int, default=32, help='batch size')
     parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='inference size (pixels)')
     parser.add_argument('--workers', type=int, default=8, help='max dataloader workers (per RANK in DDP mode)')
@@ -61,8 +62,9 @@ def main(opt):
 
     s = ('%22s' + '%11s' * 6) % ('Class', 'Images', 'Instances', 'P', 'R', 'mAP50', 'mAP50-95')
     pbar = tqdm(dataloader, desc=s, bar_format=TQDM_BAR_FORMAT)  # progress bar
-
+    total_mp = 0
     stats = []
+    total_instances = 0
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
         size = im.shape[2:4]
         nb, _, height, width = im.shape  # batch size, channels, height, width
@@ -71,7 +73,7 @@ def main(opt):
         for i in range(len(paths)):
             labelsn = targets[targets[:, 0] == i, 1:]
             pred_file = paths[i].split("/")[-1].split(".")[0] + ".txt"
-            pred_file = os.path.join(opt.txt, pred_file)
+            pred_file = os.path.join(opt.txt1, pred_file)
             try:
                 with open(pred_file, "r") as f:
                     # Process detections
@@ -89,7 +91,11 @@ def main(opt):
                     # scale_boxes(size, tbox, shapes[i][0], shapes[i][1])
                     labelsn = torch.cat((labelsn[:, 0:1], tbox), 1)
                     correct = process_batch(predn, labelsn, iouv)
-                    stats.append((correct, predn[:, 4], predn[:, 5], labelsn[:, 0]))
+                    single_stats = [(correct, predn[:, 4], predn[:, 5], labelsn[:, 0])]
+                    ap = single_img_ap(single_stats, data['names'])
+                    stats += single_stats
+                    print(ap)
+
             except FileNotFoundError:
                 print(f"FileNotFoundError: {pred_file}")
                 continue
@@ -103,6 +109,41 @@ def main(opt):
         mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
         print(mp, mr, map50, map)
     exit()
+
+
+def get_single_stats(predn, labelsn, iouv):
+    pb = torch.from_numpy(
+        np.array([x.split() for x in f.read().strip().splitlines()], dtype=np.float32)
+    )
+    pb[:, 1:5] *= torch.tensor((width, height, width, height), device=device)
+
+    tbox = xywh2xyxy(pb[:, 1:5])
+    # scale_boxes(size, tbox, shapes[i][0], shapes[i][1])
+    predn = torch.cat((tbox, pb[:, 5:6], pb[:, 0:1]), 1)
+
+    # Process targets
+    tbox = xywh2xyxy(labelsn[:, 1:5])
+    # scale_boxes(size, tbox, shapes[i][0], shapes[i][1])
+    labelsn = torch.cat((labelsn[:, 0:1], tbox), 1)
+
+    correct = process_batch(predn, labelsn, iouv)
+    single_stats = [(correct, predn[:, 4], predn[:, 5], labelsn[:, 0])]
+    return single_stats
+
+def single_img_ap(single_stats, names):
+    stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*single_stats)]  # to numpy
+    tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=False, save_dir="./",
+                                                  names=names)
+
+    unique_classes, nt = np.unique(single_stats[0][3], return_counts=True)
+    classes = list(range(9))
+    nt2 = [0] * len(classes)
+    for i in range(len(unique_classes)):
+        nt2[int(unique_classes[i])] = nt[i]
+
+    nt = np.array(nt2)
+    ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
+    return sum(ap * nt / sum(nt))
 
 def process_batch(detections, labels, iouv):
     """

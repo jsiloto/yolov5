@@ -388,7 +388,7 @@ def main(opt):
             LOGGER.info(f'WARNING ⚠️ confidence threshold {opt.conf_thres} > 0.001 produces invalid results')
         if opt.save_hybrid:
             LOGGER.info('WARNING ⚠️ --save-hybrid will return high mAP from hybrid labels, not from predictions alone')
-        all, maps, t = run(**vars(opt))
+        run(**vars(opt))
 
 
 
