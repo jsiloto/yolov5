@@ -22,26 +22,25 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
+
 def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='dataset.yaml path')
-    parser.add_argument('--txt', type=str, default=ROOT / 'data/coco128.yaml', help='label results path')
-    parser.add_argument('--batch-size', type=int, default=32, help='batch size')
-    parser.add_argument('--imgsz', '--img', '--img-size', type=int, default=640, help='inference size (pixels)')
-    parser.add_argument('--workers', type=int, default=8, help='max dataloader workers (per RANK in DDP mode)')
+    parser.add_argument('--txt1', type=str, default=ROOT / 'data/coco128.yaml', help='label results path')
+    parser.add_argument('--txt2', type=str, default=ROOT / 'data/coco128.yaml', help='label results path')
     opt = parser.parse_args()
     opt.data = check_yaml(opt.data)  # check YAML
     return opt
 
 
-
-def main(opt):
+def txtval(data, txt1, txt2):
     task = 'val'
     pad, rect = (0.0, False) if task == 'speed' else (0.5, True)  # square inference for benchmarks
     task = task if task in ('train', 'val', 'test') else 'val'  # path to train/val/test images
-
-    data, imgsz, batch_size, stride, workers = \
-        opt.data, opt.imgsz, opt.batch_size, 32, opt.workers
+    batch_size = 32
+    imgsz = 640
+    workers = 8
+    stride = 32
 
     data = check_dataset(data)  # check
     print(data['names'])
@@ -61,48 +60,85 @@ def main(opt):
 
     s = ('%22s' + '%11s' * 6) % ('Class', 'Images', 'Instances', 'P', 'R', 'mAP50', 'mAP50-95')
     pbar = tqdm(dataloader, desc=s, bar_format=TQDM_BAR_FORMAT)  # progress bar
-
-    stats = []
+    total_mp = 0
+    stats1 = []
+    stats2 = []
+    stats_best = []
+    total_instances = 0
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
-        size = im.shape[2:4]
         nb, _, height, width = im.shape  # batch size, channels, height, width
         targets[:, 2:] *= torch.tensor((width, height, width, height), device=device)
 
         for i in range(len(paths)):
             labelsn = targets[targets[:, 0] == i, 1:]
             pred_file = paths[i].split("/")[-1].split(".")[0] + ".txt"
-            pred_file = os.path.join(opt.txt, pred_file)
+            pred_file1 = os.path.join(txt1, pred_file)
+            pred_file2 = os.path.join(txt2, pred_file)
             try:
-                with open(pred_file, "r") as f:
-                    # Process detections
-                    pb = torch.from_numpy(
-                        np.array([x.split() for x in f.read().strip().splitlines()], dtype=np.float32)
-                    )
-                    pb[:, 1:5] *= torch.tensor((width, height, width, height), device=device)
 
-                    tbox = xywh2xyxy(pb[:, 1:5])
-                    # scale_boxes(size, tbox, shapes[i][0], shapes[i][1])
-                    predn = torch.cat((tbox, pb[:, 5:6],  pb[:, 0:1]), 1)
+                # Process detections
+                single_stats1 = get_single_stats(pred_file1, labelsn, iouv, width, height, device)
+                single_stats2 = get_single_stats(pred_file2, labelsn, iouv, width, height, device)
+                ap1 = single_img_ap(single_stats1, data['names'])
+                ap2 = single_img_ap(single_stats2, data['names'])
+                stats1 += single_stats1
+                stats2 += single_stats2
+                stats_best += single_stats1 if ap1 > ap2 else single_stats2
 
-                    # Process targets
-                    tbox = xywh2xyxy(labelsn[:, 1:5])
-                    # scale_boxes(size, tbox, shapes[i][0], shapes[i][1])
-                    labelsn = torch.cat((labelsn[:, 0:1], tbox), 1)
-                    correct = process_batch(predn, labelsn, iouv)
-                    stats.append((correct, predn[:, 4], predn[:, 5], labelsn[:, 0]))
             except FileNotFoundError:
                 print(f"FileNotFoundError: {pred_file}")
                 continue
 
-    print(stats[0])
+    final_map(stats1, data)
+    final_map(stats2, data)
+    final_map(stats_best, data)
+
+
+def final_map(stats, data):
     stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
-    print(stats[0])
     if len(stats) and stats[0].any():
         tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=False, save_dir="./", names=data['names'])
         ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
         mp, mr, map50, map = p.mean(), r.mean(), ap50.mean(), ap.mean()
         print(mp, mr, map50, map)
-    exit()
+
+
+def get_single_stats(pred_file, labelsn, iouv, width, height, device):
+    with open(pred_file, "r") as f:
+        pb = torch.from_numpy(
+            np.array([x.split() for x in f.read().strip().splitlines()], dtype=np.float32)
+        )
+    pb[:, 1:5] *= torch.tensor((width, height, width, height), device=device)
+
+    tbox = xywh2xyxy(pb[:, 1:5])
+    # scale_boxes(size, tbox, shapes[i][0], shapes[i][1])
+    predn = torch.cat((tbox, pb[:, 5:6], pb[:, 0:1]), 1)
+
+    # Process targets
+    tbox = xywh2xyxy(labelsn[:, 1:5])
+    # scale_boxes(size, tbox, shapes[i][0], shapes[i][1])
+    labelsn = torch.cat((labelsn[:, 0:1], tbox), 1)
+
+    correct = process_batch(predn, labelsn, iouv)
+    single_stats = [(correct, predn[:, 4], predn[:, 5], labelsn[:, 0])]
+    return single_stats
+
+
+def single_img_ap(single_stats, names):
+    stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*single_stats)]  # to numpy
+    tp, fp, p, r, f1, ap, ap_class = ap_per_class(*stats, plot=False, save_dir="./",
+                                                  names=names)
+
+    unique_classes, nt = np.unique(single_stats[0][3], return_counts=True)
+    classes = list(range(9))
+    nt2 = [0] * len(classes)
+    for i in range(len(unique_classes)):
+        nt2[int(unique_classes[i])] = nt[i]
+
+    nt = np.array(nt2)
+    ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
+    return sum(ap * nt / sum(nt))
+
 
 def process_batch(detections, labels, iouv):
     """
@@ -131,4 +167,4 @@ def process_batch(detections, labels, iouv):
 
 if __name__ == '__main__':
     opt = parse_opt()
-    main(opt)
+    txtval(opt.data, opt.txt1, opt.txt2)
