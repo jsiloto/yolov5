@@ -15,6 +15,7 @@ from utils.general import (LOGGER, TQDM_BAR_FORMAT, Profile, check_dataset, chec
                            print_args, scale_boxes, xywh2xyxy, xyxy2xywh)
 from utils.metrics import box_iou, ap_per_class
 from utils.torch_utils import select_device
+from decidermodel import DeciderModel
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
@@ -25,22 +26,27 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data', type=str, default=ROOT / 'data/coco128.yaml', help='dataset.yaml path')
-    parser.add_argument('--txt1', type=str, default=ROOT / 'data/coco128.yaml', help='label results path')
-    parser.add_argument('--txt2', type=str, default=ROOT / 'data/coco128.yaml', help='label results path')
+    parser.add_argument('--data', type=str, default=ROOT / 'yolov5/data/bdd100kvideo.yaml', help='dataset.yaml path')
+    parser.add_argument('--txt1', type=str, default=ROOT / 'movie_dataset/daytime/val/labels',
+                        help='label results path')
+    parser.add_argument('--txt2', type=str, default=ROOT / 'movie_dataset/daytime/val/labels',
+                        help='label results path')
+    parser.add_argument('--save', type=str, default="", help='Save Model dataset')
+    parser.add_argument('--task', type=str, default="val", help="val or test or train")
+    parser.add_argument('--weights', type=str, default="", help="val or test or train")
     opt = parser.parse_args()
     opt.data = check_yaml(opt.data)  # check YAML
     return opt
 
 
-def txtval(data, txt1, txt2):
-    task = 'val'
+def txtval(data, txt1, txt2, save=False, task='val', weights=""):
     pad, rect = (0.0, False) if task == 'speed' else (0.5, True)  # square inference for benchmarks
     task = task if task in ('train', 'val', 'test') else 'val'  # path to train/val/test images
     batch_size = 32
     imgsz = 640
     workers = 8
     stride = 32
+    decider = None
 
     data = check_dataset(data)  # check
     print(data['names'])
@@ -51,26 +57,38 @@ def txtval(data, txt1, txt2):
                                    False,
                                    pad=pad,
                                    rect=False,
+                                   shuffle=True,
                                    workers=workers,
                                    prefix=colorstr(f'{task}: '))[0]
 
     device = select_device("cpu", batch_size=batch_size)
+
+    print(weights)
+    if len(weights) > 0:
+        decider = DeciderModel().to(device)
+        decider.load_state_dict(torch.load(weights, map_location=device))
+
     iouv = torch.linspace(0.5, 0.95, 10, device=device)  # iou vector for mAP@0.5:0.95
-    niou = iouv.numel()
 
     s = ('%22s' + '%11s' * 6) % ('Class', 'Images', 'Instances', 'P', 'R', 'mAP50', 'mAP50-95')
     pbar = tqdm(dataloader, desc=s, bar_format=TQDM_BAR_FORMAT)  # progress bar
-    total_mp = 0
     stats1 = []
     stats2 = []
     stats_best = []
-    total_instances = 0
+    map_dataset = {}
+    correct = 0
+    total_images = 0
     for batch_i, (im, targets, paths, shapes) in enumerate(pbar):
         nb, _, height, width = im.shape  # batch size, channels, height, width
         targets[:, 2:] *= torch.tensor((width, height, width, height), device=device)
 
         for i in range(len(paths)):
+            total_images += 1
             labelsn = targets[targets[:, 0] == i, 1:]
+            # cc = [c in labelsn.T[0].int() for c in [0, 2, 7, 8]]
+            # cc = cc[0] or cc[1] or cc[2] or cc[3]
+            # print(cc)
+
             pred_file = paths[i].split("/")[-1].split(".")[0] + ".txt"
             pred_file1 = os.path.join(txt1, pred_file)
             pred_file2 = os.path.join(txt2, pred_file)
@@ -81,18 +99,44 @@ def txtval(data, txt1, txt2):
                 single_stats2 = get_single_stats(pred_file2, labelsn, iouv, width, height, device)
                 ap1 = single_img_ap(single_stats1, data['names'])
                 ap2 = single_img_ap(single_stats2, data['names'])
+
+                if ap1 == ap2 == 0.0:
+                    map_dataset[pred_file] = [0.01, 0.01]
+                else:
+                    map_dataset[pred_file] = [ap1, ap2]
+
                 stats1 += single_stats1
                 stats2 += single_stats2
-                stats_best += single_stats1 if ap1 > ap2 else single_stats2
+                if decider is not None:
+                    with torch.no_grad():
+                        inputs = im[i].to(device, non_blocking=True).float() / 255
+                        out = decider(inputs.unsqueeze(0))
+                        out = out > 0.5
+                        out = out.item()
+                        correct = correct + 1 if out == (ap2 > ap1) else correct
+                        if out:
+                            stats_best += single_stats2
+                        else:
+                            stats_best += single_stats1
+                else:
+                    stats_best += single_stats1 if ap1 > ap2 else single_stats2
 
             except FileNotFoundError:
+                map_dataset[pred_file] = [0.01, 0.01]
                 print(f"FileNotFoundError: {pred_file}")
                 continue
 
+    if len(save):
+        assert save.endswith(".json"), "save file must be json"
+        with open(save, "w") as f:
+            json.dump(map_dataset, f)
+
+    print(f"Acc: {correct/total_images}")
     map1 = final_map(stats1, data)
     map2 = final_map(stats2, data)
     map_best = final_map(stats_best, data)
     return map1, map2, map_best
+
 
 def final_map(stats, data):
     stats = [torch.cat(x, 0).cpu().numpy() for x in zip(*stats)]  # to numpy
@@ -138,6 +182,8 @@ def single_img_ap(single_stats, names):
 
     nt = np.array(nt2)
     ap50, ap = ap[:, 0], ap.mean(1)  # AP@0.5, AP@0.5:0.95
+    if sum(nt) == 0:
+        return 0
     return sum(ap * nt / sum(nt))
 
 
@@ -168,4 +214,4 @@ def process_batch(detections, labels, iouv):
 
 if __name__ == '__main__':
     opt = parse_opt()
-    txtval(opt.data, opt.txt1, opt.txt2)
+    txtval(opt.data, opt.txt1, opt.txt2, opt.save, opt.task, opt.weights)
