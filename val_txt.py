@@ -85,9 +85,6 @@ def txtval(data, txt1, txt2, save=False, task='val', weights=""):
         for i in range(len(paths)):
             total_images += 1
             labelsn = targets[targets[:, 0] == i, 1:]
-            # cc = [c in labelsn.T[0].int() for c in [0, 2, 7, 8]]
-            # cc = cc[0] or cc[1] or cc[2] or cc[3]
-            # print(cc)
 
             pred_file = paths[i].split("/")[-1].split(".")[0] + ".txt"
             pred_file1 = os.path.join(txt1, pred_file)
@@ -97,8 +94,15 @@ def txtval(data, txt1, txt2, save=False, task='val', weights=""):
                 # Process detections
                 single_stats1 = get_single_stats(pred_file1, labelsn, iouv, width, height, device)
                 single_stats2 = get_single_stats(pred_file2, labelsn, iouv, width, height, device)
+                                                 # ,ignore_classes=[0, 2, 7, 8])
                 ap1 = single_img_ap(single_stats1, data['names'])
                 ap2 = single_img_ap(single_stats2, data['names'])
+
+                # # print(labelsn[:,0].int())
+                # for c in [4, 5, 6]:
+                #     index = labelsn[:,0].int() == c
+                #     if index.any():
+                #         ap2 = 0.0
 
                 if ap1 == ap2 == 0.0:
                     map_dataset[pred_file] = [0.01, 0.01]
@@ -131,7 +135,7 @@ def txtval(data, txt1, txt2, save=False, task='val', weights=""):
         with open(save, "w") as f:
             json.dump(map_dataset, f)
 
-    print(f"Acc: {correct/total_images}")
+    print(f"Acc: {correct / total_images}")
     map1 = final_map(stats1, data)
     map2 = final_map(stats2, data)
     map_best = final_map(stats_best, data)
@@ -148,7 +152,7 @@ def final_map(stats, data):
     return map
 
 
-def get_single_stats(pred_file, labelsn, iouv, width, height, device):
+def get_single_stats(pred_file, labelsn, iouv, width, height, device, ignore_classes=None):
     with open(pred_file, "r") as f:
         pb = torch.from_numpy(
             np.array([x.split() for x in f.read().strip().splitlines()], dtype=np.float32)
@@ -158,6 +162,17 @@ def get_single_stats(pred_file, labelsn, iouv, width, height, device):
     tbox = xywh2xyxy(pb[:, 1:5])
     # scale_boxes(size, tbox, shapes[i][0], shapes[i][1])
     predn = torch.cat((tbox, pb[:, 5:6], pb[:, 0:1]), 1)
+    if ignore_classes is not None:
+        for c in ignore_classes:
+            index = predn[:, 5] == c
+            if index.any():
+                predn = predn[index]
+                # print(index)
+
+    #
+    # cc = [c in predn.T[-1].int() for c in [4,5,6]]
+    # cc = cc[0] or cc[1] or cc[2]
+    # print(cc)
 
     # Process targets
     tbox = xywh2xyxy(labelsn[:, 1:5])

@@ -2,13 +2,13 @@
 
 PARAMETERS_BASE="--img 640"
 
-for model in "baseline" "clear" "daytime" "night" "partly_cloudy" \
-  "residential" "city_street" "dawn_dusk" "highway" "overcast" "rainy" "snowy"; do
+for P in "02" "04" "06" "10"
 
   for data in "baseline" "clear" "daytime" "night" "partly_cloudy" \
     "residential" "city_street" "dawn_dusk" "highway" "overcast" "rainy" "snowy"; do
 
-    python val.py --data data/domains/${data}.yaml ${PARAMETERS_BASE} --weights domain/${model}/weights/best.pt \
+    python val.py --data data/domains/${data}.yaml ${PARAMETERS_BASE} \
+    --weights weights \
       --project domain_val --name ${model}.${data} 2>&1
 
   done
