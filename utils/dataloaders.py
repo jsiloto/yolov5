@@ -43,6 +43,9 @@ LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable
 RANK = int(os.getenv('RANK', -1))
 PIN_MEMORY = str(os.getenv('PIN_MEMORY', True)).lower() == 'true'  # global pin_memory for dataloaders
 
+LABEL_DIR = ''  # label dir
+
+
 # Get orientation exif tag
 for orientation in ExifTags.TAGS.keys():
     if ExifTags.TAGS[orientation] == 'Orientation':
@@ -426,8 +429,15 @@ class LoadStreams:
 
 
 def img2label_paths(img_paths):
+    path = 'labels'
+    if len(LABEL_DIR) == 0:
+        print("No label directory specified, using default 'labels' instead")
+    else:
+        path = LABEL_DIR
+        print("Using label directory specified in config file: " + path)
+
     # Define label paths as a function of image paths
-    sa, sb = f'{os.sep}images{os.sep}', f'{os.sep}labels{os.sep}'  # /images/, /labels/ substrings
+    sa, sb = f'{os.sep}images{os.sep}', f'{os.sep}{path}{os.sep}'  # /images/, /labels/ substrings
     return [sb.join(x.rsplit(sa, 1)).rsplit('.', 1)[0] + '.txt' for x in img_paths]
 
 
