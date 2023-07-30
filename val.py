@@ -30,6 +30,8 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
+import utils
+
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory
 if str(ROOT) not in sys.path:
@@ -154,6 +156,9 @@ def run(
 
         # Data
         data = check_dataset(data)  # check
+
+    if 'labels' in data:
+        utils.dataloaders.LABEL_DIR = data['labels']
 
     # Configure
     model.eval()
